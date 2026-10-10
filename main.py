@@ -179,12 +179,13 @@ class APIBasedChatBot:
         }
         
         data = {
-            "model": "llama3-8b-8192",  # Fast and free
+            "model": "openai/gpt-oss-20b",  # Fast and free
             "messages": [
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 200,
-            "temperature": 0.7
+            "max_tokens": 1024,
+    "reasoning_effort": "low",
+    "temperature": 0.2,
         }
         
         try:

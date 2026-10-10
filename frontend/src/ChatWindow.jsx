@@ -5,7 +5,7 @@ import {
   LogOut, Menu, Home, BarChart3
 } from 'lucide-react';
 
-const API_BASE = 'https://rag-chatbot-test-1.onrender.com';
+const API_BASE = import.meta.env.VITE_RAG_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
 const ChatWindow = () => {
   // ─── read logged-in user ───────────────────────────────────────────────────
@@ -33,11 +33,9 @@ const ChatWindow = () => {
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [trainingStatus, setTrainingStatus] = useState('idle');
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState({});
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
@@ -59,39 +57,48 @@ const ChatWindow = () => {
 const handleSendMessage = async () => {
   if (!inputMessage.trim()) return;
 
+  const question = inputMessage.trim();
   const userMsg = {
     id: Date.now(),
     type: 'user',
-    content: inputMessage,
+    content: question,
     timestamp: new Date(),
     animated: true
   };
   setMessages(m => [...m, userMsg]);
   setInputMessage('');
   setIsTyping(true);
-  
-  console.log(user.username)
-  console.log(inputMessage)
-  
+
   try {
+    if (!API_BASE) {
+      throw new Error('RAG API is not configured. Set VITE_RAG_API_BASE to your RAG server URL.');
+    }
+
     const res = await fetch(`${API_BASE}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        user: user.username, 
-        question: inputMessage  // ← Changed from "inputMessage" to "question"
+        user: user.username,
+        question
       })
     });
-    
-    const { answer } = await res.json();
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.detail || data.message || 'Chat request failed');
+    }
+    if (typeof data.answer !== 'string') {
+      throw new Error('The RAG API returned an invalid response.');
+    }
+
     setMessages(m => [
       ...m,
-      { id: Date.now()+1, type: 'bot', content: answer, timestamp: new Date(), animated: true }
+      { id: Date.now()+1, type: 'bot', content: data.answer, timestamp: new Date(), animated: true }
     ]);
-  } catch {
+  } catch (err) {
     setMessages(m => [
       ...m,
-      { id: Date.now()+1, type: 'bot', content: "⚠️ Server error", timestamp: new Date(), animated: true }
+      { id: Date.now()+1, type: 'bot', content: `⚠️ ${err.message || 'Server error'}`, timestamp: new Date(), animated: true }
     ]);
   } finally {
     setIsTyping(false);
@@ -104,7 +111,6 @@ const handleFileUpload = async (files) => {
 
   setIsUploading(true);
 
-  // 1️⃣ Initialize file items in state
   const fileItems = Array.from(files).map((file) => ({
     id: Date.now() + Math.random(),
     name: file.name,
@@ -114,78 +120,60 @@ const handleFileUpload = async (files) => {
   }));
   setUploadedFiles((prev) => [...prev, ...fileItems]);
 
-  // 2️⃣ Process each file one by one
-  for (const item of fileItems) {
-    // mark as “uploading”
+  const markFiles = (status) => {
     setUploadedFiles((prev) =>
-      prev.map((f) =>
-        f.id === item.id
-          ? { ...f, status: 'uploading' }
-          : f
-      )
+      prev.map((file) => fileItems.some((item) => item.id === file.id)
+        ? { ...file, status }
+        : file)
     );
+  };
 
-    // perform the upload
+  try {
+    if (!API_BASE) {
+      throw new Error('RAG API is not configured. Set VITE_RAG_API_BASE to your RAG server URL.');
+    }
+
+    markFiles('uploading');
     const formData = new FormData();
     formData.append('user', user.username);
-    formData.append('files', item.file);
+    fileItems.forEach((item) => formData.append('files', item.file));
 
-    let uploadRes;
-    try {
-      uploadRes = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-    } catch (err) {
-      uploadRes = { ok: false, statusText: err.message };
+    const response = await fetch(`${API_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || data.message || 'Document upload failed');
     }
 
-    if (!uploadRes.ok) {
-      // mark as failed
-      setUploadedFiles((prev) =>
-        prev.map((f) =>
-          f.id === item.id
-            ? { ...f, status: 'failed' }
-            : f
-        )
-      );
-      continue; // go to next file
-    }
-
-    // simulate server-side processing time
-    setUploadedFiles((prev) =>
-      prev.map((f) =>
-        f.id === item.id
-          ? { ...f, status: 'processing' }
-          : f
-      )
-    );
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // finally mark completed
-    setUploadedFiles((prev) =>
-      prev.map((f) =>
-        f.id === item.id
-          ? { ...f, status: 'completed' }
-          : f
-      )
-    );
+    markFiles('completed');
+    setShowUploadModal(false);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        type: 'bot',
+        content: `🎉 Successfully processed ${fileItems.length} document${fileItems.length > 1 ? 's' : ''}! I’m now ready to answer questions based on your uploaded content.`,
+        timestamp: new Date(),
+        animated: true,
+      },
+    ]);
+  } catch (err) {
+    markFiles('failed');
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        type: 'bot',
+        content: `⚠️ ${err.message || 'Document upload failed'}`,
+        timestamp: new Date(),
+        animated: true,
+      },
+    ]);
+  } finally {
+    setIsUploading(false);
   }
-
-  setIsUploading(false);
-
-  // 3️⃣ All done: close modal & send bot message
-  setShowUploadModal(false);
-  setMessages((prev) => [
-    ...prev,
-    {
-      id: Date.now() + Math.random(),
-      type: 'bot',
-      content: `🎉 Successfully processed ${fileItems.length} document${fileItems.length > 1 ? 's' : ''}! I’m now ready to answer questions based on your uploaded content.`,
-      timestamp: new Date(),
-      animated: true,
-    },
-  ]);
 };
 
   const handleDrop = e => { 
@@ -263,6 +251,7 @@ const handleSignOut = async () => {
       case 'completed':
         return <CheckCircle className="w-4 h-4 text-green-400" />;
       case 'error':
+      case 'failed':
         return <AlertCircle className="w-4 h-4 text-red-400" />;
       default:
         return null;
@@ -278,6 +267,7 @@ const handleSignOut = async () => {
       case 'completed':
         return 'Ready';
       case 'error':
+      case 'failed':
         return 'Failed';
       default:
         return 'Pending';
@@ -586,7 +576,7 @@ const handleSignOut = async () => {
                               f.status === 'uploading' ? 'text-blue-400' :
                               f.status === 'processing' ? 'text-yellow-400' :
                               f.status === 'completed' ? 'text-green-400' :
-                              f.status === 'error' ? 'text-red-400' : 'text-gray-400'
+                              f.status === 'error' || f.status === 'failed' ? 'text-red-400' : 'text-gray-400'
                             }`}>
                               {getFileStatusText(f.status)}
                             </p>
